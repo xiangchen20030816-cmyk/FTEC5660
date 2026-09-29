@@ -20,7 +20,7 @@ QUERIES = (QUERY_1, QUERY_2)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 DUMMY_RESPONSE = "please design your chain to answer these two queries."
 
-
+#读取env内容
 def load_env_file(path: Path = Path(".env")) -> None:
     """Load the simple KEY=VALUE entries used by this homework."""
     if not path.is_file():
@@ -35,6 +35,7 @@ def load_env_file(path: Path = Path(".env")) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
+#扫描文件夹返回合适图片
 def image_files(folder: Path) -> list[Path]:
     """Return supported images directly inside *folder*, sorted by filename."""
     return sorted(
@@ -43,7 +44,7 @@ def image_files(folder: Path) -> list[Path]:
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
 
-
+#把本地图片转成 base64 data URL让模型操作
 def image_data_url(path: Path) -> str:
     """Encode a local image in the format accepted by a multimodal prompt."""
     mime_type, _ = mimetypes.guess_type(path.name)
@@ -63,7 +64,85 @@ def build_chain() -> Any:
     ``deepseek-v4-flash-vision-exp``. The API key is loaded from .env.
     """
     ### YOUR CODE HERE
-    return None
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_deepseek import ChatDeepSeek
+
+    from langchain_core.output_parsers import JsonOutputParser
+
+    #env -》 key
+    llm = ChatDeepSeek(
+        model="deepseek-v4-flash-vision-exp",
+        temperature=0,
+    )
+
+    parser = JsonOutputParser()
+    
+    # context + picture 
+    prompt = ChatPromptTemplate.from_messages(
+    [
+
+        (
+            "system",
+
+            """
+            You are an expert at reading supermarket receipts and extract payment information.
+
+            Your task is to extract exactly two values from each receipt.
+
+            1. paid
+            - The final amount actually paid after ROUNDING.
+            - Use the final payment amount shown on the receipt.
+
+            2. paid without discount
+            - The amount that would have been paid without discounts.
+            - Start from receipt's SUBTOTAL.
+            - Add back every discount as a positive amount.
+            - Discounts may include promotions, coupons, member discounts, app discounts, packaging-damage discounts, percentage discounts, and similar promotional deductions.
+            - Do NOT add back ROUNDING.
+
+            Return only a valid JSON object in exactly this format:
+
+            {{
+                "paid": 394.70,
+                "paid_without_discount": 480.20
+            }}
+
+            Output rules:
+            - Use numeric values only.
+            - Do not include any additional fields.
+            - Do not include explanations.
+            - Do not include HK$ or any currency symbol.
+            - Do not include markdown or code fences.
+            - Do not include percentages.
+            - Do not include item counts.
+            """
+        ),
+
+        (
+            "human",
+
+            [
+                {
+                    "type": "text",
+                    "text": "Read this receipt and extract the two required monetary values.",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "{image_url}",
+                        "detail": "original",
+                    },
+                },
+            ],
+        ),
+
+    ]    
+)
+
+    chain = prompt | llm | parser
+
+    return chain
+    # return None
 
 
 def answer_queries(chain: Any, images: list[Path]) -> dict[str, Any]:
@@ -79,8 +158,31 @@ def answer_queries(chain: Any, images: list[Path]) -> dict[str, Any]:
     to process independent receipt-extraction prompts in parallel.
     """
     ### YOUR CODE HERE
-    _ = (chain, images)
-    return {QUERY_1: DUMMY_RESPONSE, QUERY_2: DUMMY_RESPONSE}
+    
+    #[Path(a),Path(b),,,]
+    inputs = [
+        {"image_url": image_data_url(image)} for image in images
+    ]
+
+    results = chain.batch(inputs)
+
+    print("Parsed results:")
+    
+    print(json.dumps(results, indent=2))
+
+    paid_total = Decimal("0.00")
+    paid_without_discount_total = Decimal("0.00")
+
+    for result in results:
+        paid_total += Decimal(str(result["paid"]))
+        paid_without_discount_total += Decimal(str(result["paid_without_discount"]))
+
+    return {
+        QUERY_1: f"HK${paid_total:.2f}",
+        QUERY_2: f"HK${paid_without_discount_total:.2f}",
+    }
+    # _ = (chain, images)
+    # return {QUERY_1: DUMMY_RESPONSE, QUERY_2: DUMMY_RESPONSE}
 
 
 # Everything below is provided runner/scoring code. No edits are needed.
@@ -90,7 +192,7 @@ _MONEY_RE = re.compile(
     re.IGNORECASE,
 )
 
-
+#把 LangChain 返回的Message，字符串等统一转成普通文字
 def response_text(value: Any) -> str:
     """Convert common LangChain response shapes to text for results.csv."""
     content = getattr(value, "content", value)
@@ -108,7 +210,7 @@ def response_text(value: Any) -> str:
         return json.dumps(content, ensure_ascii=False)
     return str(content).strip()
 
-
+#最终输出中检查金额。答案中只能出现一个数字
 def parse_single_amount(text: str) -> Decimal | None:
     """Accept a response only when it contains exactly one numeric amount."""
     matches = _MONEY_RE.findall(text)
@@ -129,7 +231,7 @@ def read_ground_truth(folder: Path) -> dict[str, Decimal]:
     answers = data.get("answers", data)
     return {query: Decimal(str(answers[query])).quantize(Decimal("0.01")) for query in QUERIES}
 
-
+#比较 答案 和 ground truth
 def correctness_text(response: str, expected: Decimal | None) -> str:
     """Return `correct`, or an expected/predicted mismatch explanation."""
     if expected is None:
