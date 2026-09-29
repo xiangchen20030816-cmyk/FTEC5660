@@ -82,7 +82,6 @@ def build_chain() -> Any:
         [
             (
                 "system",
-
                 """
                 You are an expert at reading supermarket receipts and extracting payment information.
 
@@ -91,7 +90,8 @@ def build_chain() -> Any:
                 1. paid
                 - The final amount actually paid after ROUNDING.
                 - Use the final payment amount shown on the receipt.
-                - This is usually the amount associated with the final payment method (for example, OCTOPUS, CASH, CARD, etc.).
+                - This is usually the amount associated with the final payment method
+                (for example, OCTOPUS, CASH, CARD, etc.).
 
                 2. subtotal
                 - The receipt's SUBTOTAL after discounts but before ROUNDING.
@@ -108,17 +108,31 @@ def build_chain() -> Any:
 
                 Important rules for identifying discounts:
                 - Only include actual deductions from the bill.
-                - Do NOT include ROUNDING, ROUNDING is not a discount.
+                - Do NOT include ROUNDING. ROUNDING is not a discount.
                 - Do NOT include normal positive item prices.
                 - Do NOT include SUBTOTAL or the final payment amount.
                 - A normal positive item price must never be treated as a discount.
-                - Every extracted discount should be supported by an actual deduction line on the receipt.
+                - Every extracted discount must be supported by an actual deduction line
+                or its corresponding promotion information on the receipt.
 
                 Cross-check each discount carefully:
-                - Read both the promotion description and the printed deduction amount.
-                - If a promotion description contains a monetary value, use it to verify the printed negative deduction amount.
-                - If the description and the deduction amount appear inconsistent,
-                re-read the receipt carefully instead of guessing.
+                - Read both the promotion description and the printed negative deduction amount.
+                - When the printed negative deduction is clear, use that monetary value.
+                - Use the promotion description as additional evidence to verify the deduction.
+                - If the printed deduction amount is visually ambiguous, use the corresponding
+                promotion description to resolve the ambiguity.
+                - For example, if the promotion says "Save $6" and the nearby deduction is
+                visually ambiguous between -$5.00 and -$6.00, extract 6.00.
+                - If a promotion description contains a monetary value, compare it carefully
+                with the nearby printed deduction amount.
+                - If a discount is described as a percentage, return the actual monetary
+                deduction shown on the receipt, not the percentage.
+                - Pay special attention to visually similar digits.
+                - Never guess an ambiguous monetary value without checking the corresponding
+                promotion description and surrounding receipt context.
+                - If the description and the deduction appear inconsistent, re-read both
+                carefully before deciding.
+                - Do not infer a discount from a normal positive item price.
                 - Do not omit or duplicate any discount line.
 
                 Before returning the result, verify:
@@ -128,23 +142,24 @@ def build_chain() -> Any:
                 - ROUNDING does not appear in discounts.
                 - No normal item price appears in discounts.
                 - Each discount appears exactly once.
+                - Every value in discounts is supported by the receipt.
 
-                For example: 
- 
-                If the receipt contains: 
+                For example:
 
-                SUBTOTAL: 514.09 
-                discount lines: -4.00, -7.80, -6.38, -28.53, -30.00 
-                ROUNDING: -0.09 
-                final payment: 514.00 
+                If the receipt contains:
 
-                Return: 
+                5% OFF: -5.39
+                SUBTOTAL: 102.31
+                ROUNDING: -0.01
+                OCTOPUS: 102.30
 
-                {{ 
-                    "paid": 514.00, 
-                    "subtotal": 514.09, 
-                    "discounts": [4.00, 7.80, 6.38, 28.53, 30.00] 
-                }} 
+                Return:
+
+                {{
+                    "paid": 102.30,
+                    "subtotal": 102.31,
+                    "discounts": [5.39]
+                }}
 
                 Output rules:
                 - Return only one valid JSON object.
@@ -159,27 +174,27 @@ def build_chain() -> Any:
                 - Do not include item counts.
                 """
             ),
-
-                (
-                    "human",
-                    [
-                        {
-                            "type": "text",
-                            "text": (
-                                "Read this receipt and extract the final amount paid, the SUBTOTAL, and every actual discount deduction."
-                            ),
+            (
+                "human",
+                [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Read this receipt carefully and extract the final amount paid, "
+                            "the SUBTOTAL, and every actual discount deduction."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "{image_url}",
+                            "detail": "original",
                         },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "{image_url}",
-                                "detail": "original",
-                            },
-                        },
-                    ],
-                ),
-            ]
-        )
+                    },
+                ],
+            ),
+        ]
+    )
 
     chain = prompt | llm | parser
 
