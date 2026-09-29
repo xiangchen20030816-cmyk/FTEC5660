@@ -79,65 +79,107 @@ def build_chain() -> Any:
     
     # context + picture 
     prompt = ChatPromptTemplate.from_messages(
-    [
+        [
+            (
+                "system",
 
-        (
-            "system",
+                """
+                You are an expert at reading supermarket receipts and extracting payment information.
 
-            """
-            You are an expert at reading supermarket receipts and extract payment information.
+                Your task is to extract exactly three pieces of information from each receipt.
 
-            Your task is to extract exactly two values from each receipt.
+                1. paid
+                - The final amount actually paid after ROUNDING.
+                - Use the final payment amount shown on the receipt.
+                - This is usually the amount associated with the final payment method (for example, OCTOPUS, CASH, CARD, etc.).
 
-            1. paid
-            - The final amount actually paid after ROUNDING.
-            - Use the final payment amount shown on the receipt.
+                2. subtotal
+                - The receipt's SUBTOTAL after discounts but before ROUNDING.
+                - Use the value explicitly shown as SUBTOTAL on the receipt.
+                - Do not reconstruct SUBTOTAL from item prices if an explicit SUBTOTAL is shown.
 
-            2. paid without discount
-            - The amount that would have been paid without discounts.
-            - Start from receipt's SUBTOTAL.
-            - Add back every discount as a positive amount.
-            - Discounts may include promotions, coupons, member discounts, app discounts, packaging-damage discounts, percentage discounts, and similar promotional deductions.
-            - Do NOT add back ROUNDING.
+                3. discounts
+                - Extract every actual discount, promotion, coupon, or deduction line.
+                - Return each discount as a positive number in a list.
+                - Each value in the list must correspond to one actual deduction from the bill.
+                - Discounts may include OFF, SAVE, DISCOUNT, COUPON, PROMOTION,
+                APP discounts, member discounts, percentage discounts,
+                packaging-damage discounts, and similar promotional deductions.
 
-            Return only a valid JSON object in exactly this format:
+                Important rules for identifying discounts:
+                - Only include actual deductions from the bill.
+                - Do NOT include ROUNDING, ROUNDING is not a discount.
+                - Do NOT include normal positive item prices.
+                - Do NOT include SUBTOTAL or the final payment amount.
+                - A normal positive item price must never be treated as a discount.
+                - Every extracted discount should be supported by an actual deduction line on the receipt.
 
-            {{
-                "paid": 394.70,
-                "paid_without_discount": 480.20
-            }}
+                Cross-check each discount carefully:
+                - Read both the promotion description and the printed deduction amount.
+                - If a promotion description contains a monetary value, use it to verify the printed negative deduction amount.
+                - If the description and the deduction amount appear inconsistent,
+                re-read the receipt carefully instead of guessing.
+                - Do not omit or duplicate any discount line.
 
-            Output rules:
-            - Use numeric values only.
-            - Do not include any additional fields.
-            - Do not include explanations.
-            - Do not include HK$ or any currency symbol.
-            - Do not include markdown or code fences.
-            - Do not include percentages.
-            - Do not include item counts.
-            """
-        ),
+                Before returning the result, verify:
+                - paid is the final amount after ROUNDING.
+                - subtotal is the explicit SUBTOTAL before ROUNDING.
+                - discounts contains only real discounts/promotions/coupons.
+                - ROUNDING does not appear in discounts.
+                - No normal item price appears in discounts.
+                - Each discount appears exactly once.
 
-        (
-            "human",
+                For example: 
+ 
+                If the receipt contains: 
 
-            [
-                {
-                    "type": "text",
-                    "text": "Read this receipt and extract the two required monetary values.",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "{image_url}",
-                        "detail": "original",
-                    },
-                },
-            ],
-        ),
+                SUBTOTAL: 514.09 
+                discount lines: -4.00, -7.80, -6.38, -28.53, -30.00 
+                ROUNDING: -0.09 
+                final payment: 514.00 
 
-    ]    
-)
+                Return: 
+
+                {{ 
+                    "paid": 514.00, 
+                    "subtotal": 514.09, 
+                    "discounts": [4.00, 7.80, 6.38, 28.53, 30.00] 
+                }} 
+
+                Output rules:
+                - Return only one valid JSON object.
+                - Use numeric values only.
+                - All values inside "discounts" must be positive numbers.
+                - If there are no discounts, return an empty list: [].
+                - Do not include any additional fields.
+                - Do not include explanations.
+                - Do not include HK$ or any currency symbol.
+                - Do not include markdown or code fences.
+                - Do not include percentages.
+                - Do not include item counts.
+                """
+            ),
+
+                (
+                    "human",
+                    [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Read this receipt and extract the final amount paid, the SUBTOTAL, and every actual discount deduction."
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "{image_url}",
+                                "detail": "original",
+                            },
+                        },
+                    ],
+                ),
+            ]
+        )
 
     chain = prompt | llm | parser
 
@@ -174,8 +216,18 @@ def answer_queries(chain: Any, images: list[Path]) -> dict[str, Any]:
     paid_without_discount_total = Decimal("0.00")
 
     for result in results:
-        paid_total += Decimal(str(result["paid"]))
-        paid_without_discount_total += Decimal(str(result["paid_without_discount"]))
+        paid = Decimal(str(result["paid"]))
+        subtotal = Decimal(str(result["subtotal"]))
+
+        discounts = [
+            Decimal(str(value)) for value in result["discounts"]
+        ]
+
+        discount_total = sum(discounts, Decimal("0.00"))
+
+        paid_total += paid
+        paid_without_discount_total += subtotal + discount_total
+
 
     return {
         QUERY_1: f"HK${paid_total:.2f}",
