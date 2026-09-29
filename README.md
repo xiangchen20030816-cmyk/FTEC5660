@@ -53,6 +53,7 @@ homework runner.
 
 Let's show the visualization of the chain design:
 
+```text
 Receipt 1 ─┐
 Receipt 2 ─┤
 Receipt 3 ─┤──> batch
@@ -68,6 +69,7 @@ Receipt N ─┘      |
                Compute
              ↙        ↘
      Total Paid    Total Without Discount
+```
 
 We use a parallel LangChain pipeline to process all receipt images simultaneously. 
 First, each image is converted into a URL format that can be read by the model, then we define the task rules and combine them with the task and image input, sending all of them to the model. After processing, the model output is converted into structured results using JsonOutputParser. Finally, Python is used to perform the required numerical calculations, and the results are formatted according to the specified output requirements.
